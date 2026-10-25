@@ -1,5 +1,5 @@
 import express from "express";
-import { registerUser , loginUser  } from "../controllers/authController";
+import { registerUser , loginUser , updateProfile , deleteAccount  } from "../controllers/authController";
 import { protect } from "../middleware/authMiddleware";
 
 
@@ -10,5 +10,7 @@ router.post("/login", loginUser);
 router.get("/me", protect, async (req: any, res) => {
   res.json(req.user);
 });
+router.put("/profile", protect, updateProfile);
+router.delete("/profile", protect, deleteAccount);
 
 export default router;

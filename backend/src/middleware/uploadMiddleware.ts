@@ -1,9 +1,15 @@
 import multer from "multer";
 import path from "path";
+import { ensureUploadDir, profileUploadPath } from "../utils/ensureUploadDir";
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, "uploads/");
+    try {
+      ensureUploadDir(profileUploadPath);
+      cb(null, profileUploadPath);
+    } catch (error) {
+      cb(error as Error, profileUploadPath);
+    }
   },
 
   filename: (req, file, cb) => {

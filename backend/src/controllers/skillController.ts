@@ -44,8 +44,8 @@ export const getSkills = async (req: AuthRequest, res: Response) => {
       query.level = level;
     }
 
-    // 2️⃣ Fetch skills + tutor info
-    let skillsQuery = Skill.find(query).populate("tutor");
+    // 2️⃣ Fetch skills + tutor info (never expose password hash)
+    let skillsQuery = Skill.find(query).populate("tutor", "-password");
 
     let skills = await skillsQuery;
 

@@ -18,6 +18,20 @@ export const requestSession = async (req: AuthRequest, res: Response) => {
     try {
         const { skillId } = req.body;
 
+        if (!skillId) {
+            return res.status(400).json({
+                message: "skillId is required"
+            });
+        }
+
+        // Only learners can initiate a learner-to-tutor session request
+        // (matches TutorProfilePage + save-skill/my-reviews role policy).
+        if (!req.user || req.user.role !== "learner") {
+            return res.status(403).json({
+                message: "Only learners can request sessions"
+            });
+        }
+
         // 1. Find skill
         const skill = await Skill.findById(skillId);
 
@@ -27,7 +41,7 @@ export const requestSession = async (req: AuthRequest, res: Response) => {
             });
         }
 
-        // 2. Find tutor
+        // 2. Find tutor (must be a valid tutor user)
         const tutor = await User.findById(skill.tutor);
 
         if (!tutor) {
@@ -36,8 +50,15 @@ export const requestSession = async (req: AuthRequest, res: Response) => {
             });
         }
 
-        // 3. Find learner
-        const learner = await User.findById(req.user._id);
+        if (tutor.role !== "tutor") {
+            return res.status(400).json({
+                message: "Requested user is not a tutor"
+            });
+        }
+
+        // 3. Find learner (identity always from JWT, never client-supplied)
+        const learnerId = req.user._id.toString();
+        const learner = await User.findById(learnerId);
 
         if (!learner) {
             return res.status(404).json({
@@ -45,10 +66,32 @@ export const requestSession = async (req: AuthRequest, res: Response) => {
             });
         }
 
-        // 4. Create session
+        // Prevent self-requests: skill owner cannot request own skill.
+        if (skill.tutor.toString() === learnerId) {
+            return res.status(400).json({
+                message: "You cannot request a session for your own skill"
+            });
+        }
+
+        // Prevent duplicate pending requests for the same learner/tutor/skill.
+        // Rejected/cancelled/completed sessions do not block a fresh request.
+        const existingPending = await Session.findOne({
+            tutor: skill.tutor,
+            learner: learnerId,
+            skill: skillId,
+            status: "pending"
+        });
+
+        if (existingPending) {
+            return res.status(409).json({
+                message: "You already have a pending request for this skill"
+            });
+        }
+
+        // 4. Create session (status always defaults to pending; learner from JWT)
         const session = await Session.create({
             tutor: skill.tutor,
-            learner: req.user._id,
+            learner: learnerId,
             skill: skillId,
             requestedAt: new Date()
         });

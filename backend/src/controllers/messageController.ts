@@ -208,6 +208,15 @@ export const uploadMessageFile = async (req: AuthRequest, res: Response) => {
                 );
 
 
+        // Real-time delivery (same contract as text messages in sendMessage):
+        // emit only after persistence succeeds, to the conversation room only.
+        const io = getIO();
+        io.to(conversationId).emit(
+            "new_message",
+            populatedMessage
+        );
+
+
         return res.status(201).json(
             populatedMessage
         );

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 import { Send, MessageCircle, ArrowLeft, Paperclip } from "lucide-react";
 import { useAuthStore } from "../../store/authStore";
 import { conversationsApi, messagesApi } from "../../api/services";
@@ -37,6 +38,8 @@ interface Message {
 
 export const Chat: React.FC = () => {
     const { user } = useAuthStore();
+    const { conversationId: routeConversationId } = useParams<{ conversationId: string }>();
+    const navigate = useNavigate();
 
     const [conversations, setConversations] = useState<Conversation[]>([]);
     const [selectedConversation, setSelectedConversation] =
@@ -45,18 +48,32 @@ export const Chat: React.FC = () => {
     const [messages, setMessages] = useState<Message[]>([]);
     const [text, setText] = useState("");
 
+    const [conversationError, setConversationError] = useState<string | null>(null);
+
     const [uploadingFile, setUploadingFile] = useState(false);
 
     const [loadingConversations, setLoadingConversations] = useState(true);
     const [loadingMessages, setLoadingMessages] = useState(false);
     const [sending, setSending] = useState(false);
 
-    const messagesEndRef = useRef<HTMLDivElement | null>(null);
+    const messagesScrollRef = useRef<HTMLDivElement | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+    // True when the user is near the bottom of the message history.
+    // Captured BEFORE new messages are appended so incoming events only
+    // auto-scroll when the user was already reading the latest messages.
+    const isNearBottom = () => {
+        const el = messagesScrollRef.current;
+        if (!el) return true;
+        return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    };
+
     const scrollToBottom = (smooth = true) => {
-        messagesEndRef.current?.scrollIntoView({
+        const el = messagesScrollRef.current;
+        if (!el) return;
+        el.scrollTo({
+            top: el.scrollHeight,
             behavior: smooth ? "smooth" : "auto",
         });
     };
@@ -79,22 +96,51 @@ export const Chat: React.FC = () => {
     };
 
     // -----------------------------------------
-    // Load messages
+    // Load messages (guarded against stale responses)
     // -----------------------------------------
+    const activeConversationRef = useRef<string | null>(null);
+
     const fetchMessages = async (conversationId: string) => {
+        activeConversationRef.current = conversationId;
+
         try {
             setLoadingMessages(true);
+            setConversationError(null);
+            // Clear previous conversation's messages immediately on switch
+            setMessages([]);
             const response = await messagesApi.getMessages(conversationId);
+
+            // Ignore delayed responses from a previously selected conversation
+            if (activeConversationRef.current !== conversationId) {
+                return;
+            }
+
             setMessages(response.data);
 
             // Wait until messages are rendered
             setTimeout(() => {
                 scrollToBottom(false);
             }, 50);
-        } catch (error) {
+        } catch (error: unknown) {
+            if (activeConversationRef.current !== conversationId) {
+                return;
+            }
+
+            const status = (error as { response?: { status?: number } })?.response?.status;
+
+            if (status === 401 || status === 403) {
+                setConversationError("You are not authorized to view this conversation.");
+            } else if (status === 404) {
+                setConversationError("Conversation not found.");
+            } else {
+                setConversationError("Failed to load messages.");
+            }
+
             console.error("Message error:", error);
         } finally {
-            setLoadingMessages(false);
+            if (activeConversationRef.current === conversationId) {
+                setLoadingMessages(false);
+            }
         }
     };
 
@@ -104,6 +150,48 @@ export const Chat: React.FC = () => {
     useEffect(() => {
         fetchConversations();
     }, []);
+
+
+    // -----------------------------------------
+    // Honor /chat/:conversationId deep link
+    // -----------------------------------------
+    useEffect(() => {
+        if (loadingConversations) {
+            return;
+        }
+
+        // No route parameter: clear selection (list placeholder state)
+        if (!routeConversationId) {
+            activeConversationRef.current = null;
+            setSelectedConversation(null);
+            setMessages([]);
+            setConversationError(null);
+            return;
+        }
+
+        // Avoid re-selecting the already active conversation
+        if (selectedConversation?._id === routeConversationId) {
+            return;
+        }
+
+        const match = conversations.find(
+            (conversation) => conversation._id === routeConversationId
+        );
+
+        if (match) {
+            setSelectedConversation(match);
+            fetchMessages(match._id);
+        } else {
+            // Unknown / inaccessible ID: never display a different conversation.
+            // Message fetch would 403/404 via backend participant checks;
+            // attempt it so 401/403/404 surface through existing error handling.
+            activeConversationRef.current = null;
+            setSelectedConversation(null);
+            setMessages([]);
+            fetchMessages(routeConversationId);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [routeConversationId, loadingConversations, conversations]);
 
 
     // -----------------------------------------
@@ -161,9 +249,29 @@ export const Chat: React.FC = () => {
         };
     }, [selectedConversation?._id]);
 
-    // Listen for new messages
+    // Listen for new messages (only for the currently active conversation)
     useEffect(() => {
         const handleNewMessage = (message: Message) => {
+            const messageConversationId =
+                typeof message.conversation === "string"
+                    ? message.conversation
+                    : (message.conversation as unknown as { _id?: string })?._id;
+
+            if (
+                activeConversationRef.current &&
+                messageConversationId &&
+                messageConversationId !== activeConversationRef.current
+            ) {
+                // Belongs to a different conversation; its own view will fetch it.
+                // Refresh list previews only.
+                fetchConversations();
+                return;
+            }
+
+            // Only force-scroll when the user was already near the bottom.
+            // Readers scrolled up keep their position.
+            const shouldStickToBottom = isNearBottom();
+
             console.log("📨 New real-time message:", message);
             setMessages((prevMessages) => {
                 // Prevent duplicate messages
@@ -177,6 +285,14 @@ export const Chat: React.FC = () => {
 
                 return [...prevMessages, message];
             });
+
+            if (shouldStickToBottom) {
+                setTimeout(() => {
+                    scrollToBottom(true);
+                }, 50);
+            } else {
+                fetchConversations();
+            }
         };
         socket.on("new_message", handleNewMessage);
 
@@ -185,12 +301,14 @@ export const Chat: React.FC = () => {
         };
     }, []);
     // -----------------------------------------
-    // Select conversation
+    // Select conversation (keeps URL as source of truth)
     // -----------------------------------------
     const handleSelectConversation = (conversation: Conversation) => {
-        setSelectedConversation(conversation);
+        if (selectedConversation?._id === conversation._id) {
+            return;
+        }
 
-        fetchMessages(conversation._id);
+        navigate(`/chat/${conversation._id}`);
     };
 
     // -----------------------------------------
@@ -284,10 +402,10 @@ export const Chat: React.FC = () => {
     };
 
     return (
-        <div className="min-h-screen bg-ink-50">
+        <div className="bg-ink-50 overflow-hidden flex flex-col h-[calc(100dvh-64px)] min-h-0">
 
             {/* Header */}
-            <div className="bg-white border-b border-ink-100">
+            <div className="bg-white border-b border-ink-100 flex-shrink-0">
                 <div className="max-w-6xl mx-auto px-4 py-5">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-xl bg-ink-900 flex items-center justify-center">
@@ -310,10 +428,10 @@ export const Chat: React.FC = () => {
             </div>
 
             {/* Main Chat */}
-            <div className="h-[calc(100vh-64px)] overflow-hidden">
-                <div className="max-w-6xl mx-auto h-full px-4 py-4">
-                    <div className="bg-white rounded-2xl shadow-sm border border-ink-100 overflow-hidden">
-                        <div className="grid md:grid-cols-[300px_minmax(0,1fr)] h-full min-h-0 overflow-hidden border border-ink-100 rounded-2xl bg-white">
+            <div className="flex-1 min-h-0 overflow-hidden">
+                <div className="max-w-6xl mx-auto h-full min-h-0 px-4 py-4">
+                    <div className="h-full min-h-0 overflow-hidden">
+                        <div className="grid md:grid-cols-[300px_minmax(0,1fr)] h-full min-h-0 overflow-hidden border border-ink-100 rounded-2xl bg-white min-w-0">
 
                             {/* -------------------------------- */}
                             {/* Conversation List */}
@@ -424,7 +542,7 @@ export const Chat: React.FC = () => {
 
                                             {/* Mobile Back Button */}
                                             <button
-                                                onClick={() => setSelectedConversation(null)}
+                                                onClick={() => navigate("/conversations")}
                                                 className="md:hidden p-2 rounded-lg hover:bg-ink-50 transition-colors"
                                             >
                                                 <ArrowLeft size={18} />
@@ -461,8 +579,22 @@ export const Chat: React.FC = () => {
                                         </div>
 
                                         {/* Messages */}
-                                        <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-3">
-                                            {loadingMessages ? (
+                                        <div
+                                            ref={messagesScrollRef}
+                                            className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-5 space-y-3"
+                                        >
+                                            {conversationError ? (
+                                                <div className="h-full flex flex-col items-center justify-center text-center">
+                                                    <MessageCircle
+                                                        size={40}
+                                                        className="text-ink-200 mb-3"
+                                                    />
+
+                                                    <p className="text-sm text-ink-500">
+                                                        {conversationError}
+                                                    </p>
+                                                </div>
+                                            ) : loadingMessages ? (
                                                 <div className="text-center text-sm text-ink-400">
                                                     Loading messages...
                                                 </div>
@@ -595,7 +727,6 @@ export const Chat: React.FC = () => {
                                                     );
                                                 })
                                             )}
-                                            <div ref={messagesEndRef} />
                                         </div>
 
                                         {/* Message Input */}

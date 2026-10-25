@@ -310,7 +310,7 @@ export const UserProfilePage: React.FC = () => {
       const formData = new FormData();
       formData.append('image', file);
       const res = await usersApi.uploadProfileImage(formData);
-      const updatedUser = res.data;
+      const updatedUser = res.data?.user ?? res.data;
       const token = localStorage.getItem('cse_token');
 
       if (token && user) {

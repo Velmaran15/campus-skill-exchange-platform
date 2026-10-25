@@ -6,6 +6,7 @@ import {
 } from "../controllers/messageController";
 import { protect } from "../middleware/authMiddleware";
 import { chatUpload } from "../middleware/chatUploadMiddleware";
+import { handleUploadError } from "../middleware/uploadErrorMiddleware";
 
 const router = express.Router();
 
@@ -23,14 +24,7 @@ router.post(
             (error) => {
 
                 if (error) {
-                    console.error(
-                        "❌ Multer upload error:",
-                        error
-                    );
-
-                    return res.status(400).json({
-                        message: error.message,
-                    });
+                    return handleUploadError(error, req, res, next);
                 }
 
                 next();

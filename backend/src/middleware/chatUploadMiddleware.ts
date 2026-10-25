@@ -1,23 +1,15 @@
 import multer from "multer";
 import path from "path";
-import fs from "fs";
-
-const chatUploadPath = path.join(
-    process.cwd(),
-    "uploads",
-    "chat"
-);
-
-// Create directory if it doesn't exist
-if (!fs.existsSync(chatUploadPath)) {
-    fs.mkdirSync(chatUploadPath, {
-        recursive: true,
-    });
-}
+import { ensureUploadDir, chatUploadPath } from "../utils/ensureUploadDir";
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, chatUploadPath);
+        try {
+            ensureUploadDir(chatUploadPath);
+            cb(null, chatUploadPath);
+        } catch (error) {
+            cb(error as Error, chatUploadPath);
+        }
     },
 
     filename: (req, file, cb) => {
