@@ -32,9 +32,11 @@ const httpServer = createServer(app);
 connectDB();
 
 
+const frontendUrl = process.env.CLIENT_URL || "http://localhost:5173";
+
 const io = new Server(httpServer, {
   cors: {
-    origin: "http://localhost:5173",
+    origin: frontendUrl,
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -129,7 +131,7 @@ io.on("connection", (socket) => {
 });
 
 // Middleware
-app.use(cors());
+app.use(cors({ origin: frontendUrl, credentials: true }));
 app.use(express.json());
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
