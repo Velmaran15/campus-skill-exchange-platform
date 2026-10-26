@@ -32,13 +32,16 @@ const httpServer = createServer(app);
 connectDB();
 
 
-const frontendUrl = process.env.CLIENT_URL || "http://localhost:5173";
+// Normalize CORS origin: trim whitespace and trailing slashes
+const rawClientUrl = process.env.CLIENT_URL || "http://localhost:5173";
+const frontendUrl = rawClientUrl.trim().replace(/\/+$/, "");
 
 const io = new Server(httpServer, {
   cors: {
     origin: frontendUrl,
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"],
   },
 });
 initializeSocket(io);
@@ -131,7 +134,12 @@ io.on("connection", (socket) => {
 });
 
 // Middleware
-app.use(cors({ origin: frontendUrl, credentials: true }));
+app.use(cors({
+  origin: frontendUrl,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 app.use(express.json());
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
